@@ -1,0 +1,33 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: rag-agent
+  namespace: kubeflow-user
+  labels:
+    app: agentic-rag
+spec:
+  predictor:
+    containers:
+      - name: rag-agent
+        image: ghcr.io/tilakgupta/agentic-rag-kubeflow:latest
+        command: ["python", "-m", "agentic_rag.serving.kserve_runtime"]
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: OPENAI_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: llm-secrets
+                key: openai-api-key
+          - name: CHROMA_HOST
+            value: "chroma.kubeflow.svc.cluster.local"
+          - name: CHROMA_PORT
+            value: "8000"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"

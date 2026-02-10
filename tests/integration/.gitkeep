@@ -1,0 +1,4 @@
+# Integration tests
+#
+# These tests require external services (ChromaDB, LLM API).
+# Mark with @pytest.mark.integration and skip in CI by default.

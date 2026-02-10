@@ -1,0 +1,30 @@
+site_name: Agentic RAG on Kubeflow
+site_description: Production-grade Retrieval-Augmented Generation with autonomous agents on Kubeflow
+repo_url: https://github.com/tilakgupta/agentic-rag-kubeflow
+
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: indigo
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]

@@ -1,0 +1,6 @@
+# Terraform backend & variable defaults.
+# Copy this to terraform.tfvars and fill in values.
+
+project_id   = "my-gcp-project"
+region       = "us-central1"
+cluster_name = "agentic-rag-cluster"
