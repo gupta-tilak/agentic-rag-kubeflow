@@ -1,0 +1,1024 @@
+# PIPELINE DEFINITION
+# Name: rag-ingestion-pipeline
+# Description: Modular RAG ingestion: fetch documents → chunk text → generate embeddings → index vectors.  Optionally evaluates retrieval quality after indexing.
+# Inputs:
+#    chroma_host: str [Default: 'chroma.kubeflow.svc.cluster.local']
+#    chroma_port: int [Default: 8000.0]
+#    chunk_overlap: int [Default: 64.0]
+#    chunk_size: int [Default: 512.0]
+#    collection_name: str [Default: 'agentic_rag']
+#    distance_metric: str [Default: 'cosine']
+#    embed_batch_size: int [Default: 64.0]
+#    embedding_model: str [Default: 'sentence-transformers/all-MiniLM-L6-v2']
+#    eval_queries_path: str [Default: '/data/eval_queries.json']
+#    glob_pattern: str [Default: '**/*.md']
+#    max_retries: int [Default: 3.0]
+#    normalize_embeddings: bool [Default: True]
+#    request_headers: str [Default: '{}']
+#    request_timeout: int [Default: 60.0]
+#    retrieval_k: int [Default: 5.0]
+#    run_evaluation: bool [Default: False]
+#    separators: str [Default: '["\n\n", "\n", ". ", " ", ""]']
+#    source_type: str [Default: 'directory']
+#    upsert_batch_size: int [Default: 5000.0]
+#    urls: str [Default: '["/data/documents"]']
+#    vector_db_type: str [Default: 'chroma']
+components:
+  comp-chunk-text:
+    executorLabel: exec-chunk-text
+    inputDefinitions:
+      artifacts:
+        raw_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Input Dataset \u2014 JSON-Lines produced by ``fetch_documents``\
+            \ with\nat minimum ``doc_id``, ``source``, ``title``, and ``text`` keys."
+      parameters:
+        chunk_overlap:
+          defaultValue: 64.0
+          description: Number of overlapping characters between consecutive chunks.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        chunk_size:
+          defaultValue: 512.0
+          description: Maximum character length of each chunk.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        separators:
+          defaultValue: '["\n\n", "\n", ". ", " ", ""]'
+          description: JSON-encoded list of split boundaries, in priority order.
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        chunked_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Output Dataset \u2014 JSON-Lines, one record per chunk (see\
+            \ module docstring)."
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Output Metrics artifact with chunking statistics.
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-condition-1:
+    dag:
+      tasks:
+        evaluate-retrieval:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-evaluate-retrieval
+          inputs:
+            parameters:
+              chroma_host:
+                componentInputParameter: pipelinechannel--chroma_host
+              chroma_port:
+                componentInputParameter: pipelinechannel--chroma_port
+              collection_name:
+                componentInputParameter: pipelinechannel--collection_name
+              embedding_model:
+                componentInputParameter: pipelinechannel--embedding_model
+              eval_queries_path:
+                componentInputParameter: pipelinechannel--eval_queries_path
+              k:
+                componentInputParameter: pipelinechannel--retrieval_k
+          taskInfo:
+            name: evaluate-retrieval
+    inputDefinitions:
+      parameters:
+        pipelinechannel--chroma_host:
+          parameterType: STRING
+        pipelinechannel--chroma_port:
+          parameterType: NUMBER_INTEGER
+        pipelinechannel--collection_name:
+          parameterType: STRING
+        pipelinechannel--embedding_model:
+          parameterType: STRING
+        pipelinechannel--eval_queries_path:
+          parameterType: STRING
+        pipelinechannel--retrieval_k:
+          parameterType: NUMBER_INTEGER
+        pipelinechannel--run_evaluation:
+          parameterType: BOOLEAN
+  comp-evaluate-retrieval:
+    executorLabel: exec-evaluate-retrieval
+    inputDefinitions:
+      parameters:
+        chroma_host:
+          parameterType: STRING
+        chroma_port:
+          parameterType: NUMBER_INTEGER
+        collection_name:
+          parameterType: STRING
+        embedding_model:
+          description: HuggingFace model identifier.
+          parameterType: STRING
+        eval_queries_path:
+          description: 'Path to a JSON file with ``[{"query": "...", "expected_source":
+            "..."}]``.'
+          parameterType: STRING
+        k:
+          defaultValue: 5.0
+          description: Number of documents to retrieve per query.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-fetch-documents:
+    executorLabel: exec-fetch-documents
+    inputDefinitions:
+      parameters:
+        glob_pattern:
+          defaultValue: '**/*.*'
+          description: File-matching glob (directory mode only).
+          isOptional: true
+          parameterType: STRING
+        max_retries:
+          defaultValue: 3.0
+          description: Number of retry attempts for transient HTTP errors.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        request_headers:
+          defaultValue: '{}'
+          description: JSON-encoded ``dict`` of HTTP headers (url mode only).
+          isOptional: true
+          parameterType: STRING
+        request_timeout:
+          defaultValue: 60.0
+          description: Per-request timeout in seconds.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        source_type:
+          description: One of ``"url"``, ``"directory"``, ``"gcs"``.
+          parameterType: STRING
+        urls:
+          description: "JSON-encoded **list** of source identifiers.\n* ``\"url\"\
+            ``       \u2192 ``[\"https://...\", \"https://...\"]``\n* ``\"directory\"\
+            `` \u2192 ``[\"/mnt/data/docs\"]``   (single path)\n* ``\"gcs\"``    \
+            \   \u2192 ``[\"gs://bucket/prefix\"]``"
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Output Metrics artifact with fetch statistics.
+        raw_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Output Dataset \u2014 one JSON object per line (see module\
+            \ docstring)."
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-generate-embeddings:
+    executorLabel: exec-generate-embeddings
+    inputDefinitions:
+      artifacts:
+        chunked_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Input Dataset \u2014 JSON-Lines produced by ``chunk_text``\
+            \ with at\nminimum ``chunk_id`` and ``text`` keys."
+      parameters:
+        batch_size:
+          defaultValue: 64.0
+          description: Number of texts to embed per forward pass.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        embedding_model:
+          defaultValue: sentence-transformers/all-MiniLM-L6-v2
+          description: HuggingFace sentence-transformer model identifier.
+          isOptional: true
+          parameterType: STRING
+        normalize_embeddings:
+          defaultValue: true
+          description: Whether to L2-normalise vectors (recommended for cosine similarity).
+          isOptional: true
+          parameterType: BOOLEAN
+    outputDefinitions:
+      artifacts:
+        embedded_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Output Dataset \u2014 JSON-Lines, each record enriched with\n\
+            ``embedding``, ``embedding_model``, and ``embedding_dim`` keys."
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Output Metrics artifact with embedding statistics.
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-store-vectors:
+    executorLabel: exec-store-vectors
+    inputDefinitions:
+      artifacts:
+        embedded_documents:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+          description: "Input Dataset \u2014 JSON-Lines produced by ``generate_embeddings``\n\
+            with at minimum ``chunk_id``, ``text``, ``embedding``, and\narbitrarily\
+            \ rich metadata fields."
+      parameters:
+        chroma_host:
+          parameterType: STRING
+        chroma_port:
+          parameterType: NUMBER_INTEGER
+        collection_name:
+          description: Target collection / index name.
+          parameterType: STRING
+        distance_metric:
+          defaultValue: cosine
+          description: Distance function (``cosine`` | ``l2`` | ``ip``).
+          isOptional: true
+          parameterType: STRING
+        upsert_batch_size:
+          defaultValue: 5000.0
+          description: "Max records per upsert call (Chroma cap \u2248 41 666)."
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        vector_db_type:
+          defaultValue: chroma
+          description: Backend type (``"chroma"``).  Extend for others.
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Output Metrics artifact with indexing statistics.
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-chunk-text:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - chunk_text
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'langchain>=0.2,<1'\
+          \ 'langchain-text-splitters>=0.2,<1'  &&  python3 -m pip install --quiet\
+          \ --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef chunk_text(\n    raw_documents: dsl.Input[dsl.Dataset],\n   \
+          \ chunked_documents: dsl.Output[dsl.Dataset],\n    metrics: dsl.Output[dsl.Metrics],\n\
+          \    chunk_size: int = 512,\n    chunk_overlap: int = 64,\n    separators:\
+          \ str = '[\"\\\\n\\\\n\", \"\\\\n\", \". \", \" \", \"\"]',\n) -> str:\n\
+          \    \"\"\"Split normalised documents into overlapping text chunks.\n\n\
+          \    Parameters\n    ----------\n    raw_documents:\n        Input Dataset\
+          \ \u2014 JSON-Lines produced by ``fetch_documents`` with\n        at minimum\
+          \ ``doc_id``, ``source``, ``title``, and ``text`` keys.\n    chunked_documents:\n\
+          \        Output Dataset \u2014 JSON-Lines, one record per chunk (see module\
+          \ docstring).\n    metrics:\n        Output Metrics artifact with chunking\
+          \ statistics.\n    chunk_size:\n        Maximum character length of each\
+          \ chunk.\n    chunk_overlap:\n        Number of overlapping characters between\
+          \ consecutive chunks.\n    separators:\n        JSON-encoded list of split\
+          \ boundaries, in priority order.\n\n    Returns\n    -------\n    str\n\
+          \        Summary, e.g. ``\"Produced 256 chunks from 42 documents\"``.\n\
+          \    \"\"\"\n    import json\n    import logging\n    from pathlib import\
+          \ Path\n\n    from langchain_core.documents import Document\n    from langchain_text_splitters\
+          \ import RecursiveCharacterTextSplitter\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    log = logging.getLogger(\"chunk_text\")\n\n    # \u2500\u2500 validate\
+          \ params \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    if chunk_overlap >=\
+          \ chunk_size:\n        raise ValueError(\n            f\"chunk_overlap ({chunk_overlap})\
+          \ must be < chunk_size ({chunk_size})\"\n        )\n\n    # \u2500\u2500\
+          \ read raw documents \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    raw_records: list[dict]\
+          \ = []\n    with open(raw_documents.path) as fh:\n        for lineno, line\
+          \ in enumerate(fh, 1):\n            line = line.strip()\n            if\
+          \ not line:\n                continue\n            try:\n              \
+          \  obj = json.loads(line)\n            except json.JSONDecodeError as exc:\n\
+          \                log.warning(\"Skipping malformed line %d: %s\", lineno,\
+          \ exc)\n                continue\n            if \"text\" not in obj:\n\
+          \                log.warning(\"Skipping line %d: missing 'text' key\", lineno)\n\
+          \                continue\n            raw_records.append(obj)\n\n    log.info(\"\
+          Read %d documents from input artifact\", len(raw_records))\n\n    # \u2500\
+          \u2500 configure splitter \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    sep_list = json.loads(separators)\
+          \ if isinstance(separators, str) else separators\n    splitter = RecursiveCharacterTextSplitter(\n\
+          \        chunk_size=chunk_size,\n        chunk_overlap=chunk_overlap,\n\
+          \        length_function=len,\n        separators=sep_list,\n    )\n\n \
+          \   # \u2500\u2500 chunk each document \u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    all_chunks:\
+          \ list[dict] = []\n    for rec in raw_records:\n        doc_id = rec.get(\"\
+          doc_id\", \"unknown\")\n        source = rec.get(\"source\", \"\")\n   \
+          \     title = rec.get(\"title\", \"\")\n        text = rec[\"text\"]\n\n\
+          \        lc_docs = splitter.split_documents(\n            [Document(page_content=text,\
+          \ metadata={\"source\": source})]\n        )\n\n        chunk_count = len(lc_docs)\n\
+          \        for idx, chunk in enumerate(lc_docs):\n            chunk_text_content\
+          \ = chunk.page_content\n            all_chunks.append({\n              \
+          \  \"chunk_id\": f\"{doc_id}_{idx}\",\n                \"doc_id\": doc_id,\n\
+          \                \"source\": source,\n                \"title\": title,\n\
+          \                \"text\": chunk_text_content,\n                \"chunk_index\"\
+          : idx,\n                \"chunk_count\": chunk_count,\n                \"\
+          char_count\": len(chunk_text_content),\n                \"token_estimate\"\
+          : len(chunk_text_content) // 4,  # rough \u22484 chars/token\n         \
+          \   })\n\n    log.info(\"Produced %d chunks from %d documents\", len(all_chunks),\
+          \ len(raw_records))\n\n    # \u2500\u2500 write output \u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    out_path = Path(chunked_documents.path)\n\
+          \    out_path.parent.mkdir(parents=True, exist_ok=True)\n    with open(out_path,\
+          \ \"w\") as fh:\n        for chunk in all_chunks:\n            fh.write(json.dumps(chunk,\
+          \ ensure_ascii=False) + \"\\n\")\n\n    # artifact metadata\n    chunked_documents.metadata[\"\
+          num_chunks\"] = len(all_chunks)\n    chunked_documents.metadata[\"num_documents\"\
+          ] = len(raw_records)\n    chunked_documents.metadata[\"chunk_size\"] = chunk_size\n\
+          \    chunked_documents.metadata[\"chunk_overlap\"] = chunk_overlap\n   \
+          \ total_chars = sum(c[\"char_count\"] for c in all_chunks)\n    chunked_documents.metadata[\"\
+          total_chars\"] = total_chars\n\n    # KFP Metrics\n    metrics.log_metric(\"\
+          chunks_produced\", len(all_chunks))\n    metrics.log_metric(\"documents_processed\"\
+          , len(raw_records))\n    metrics.log_metric(\"avg_chunk_chars\",\n     \
+          \                  total_chars / len(all_chunks) if all_chunks else 0)\n\
+          \n    msg = f\"Produced {len(all_chunks)} chunks from {len(raw_records)}\
+          \ documents\"\n    log.info(msg)\n    return msg\n\n"
+        image: python:3.11-slim
+    exec-evaluate-retrieval:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_retrieval
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'langchain' 'langchain-community'\
+          \ 'langchain-huggingface' 'chromadb' 'sentence-transformers'  &&  python3\
+          \ -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_retrieval(\n    eval_queries_path: str,\n    chroma_host:\
+          \ str,\n    chroma_port: int,\n    collection_name: str,\n    embedding_model:\
+          \ str,\n    k: int = 5,\n) -> float:\n    \"\"\"Run a simple hit-rate evaluation\
+          \ over a set of test queries.\n\n    Parameters\n    ----------\n    eval_queries_path:\n\
+          \        Path to a JSON file with ``[{\"query\": \"...\", \"expected_source\"\
+          : \"...\"}]``.\n    chroma_host / chroma_port / collection_name:\n     \
+          \   Chroma connection parameters.\n    embedding_model:\n        HuggingFace\
+          \ model identifier.\n    k:\n        Number of documents to retrieve per\
+          \ query.\n\n    Returns\n    -------\n    float\n        Hit rate \u2208\
+          \ [0, 1].\n    \"\"\"\n    import json\n\n    import chromadb\n    from\
+          \ langchain_community.vectorstores import Chroma\n    from langchain_huggingface\
+          \ import HuggingFaceEmbeddings\n\n    with open(eval_queries_path) as f:\n\
+          \        eval_set = json.load(f)\n\n    embeddings = HuggingFaceEmbeddings(model_name=embedding_model)\n\
+          \    client = chromadb.HttpClient(host=chroma_host, port=chroma_port)\n\
+          \    vs = Chroma(\n        client=client,\n        collection_name=collection_name,\n\
+          \        embedding_function=embeddings,\n    )\n    retriever = vs.as_retriever(search_kwargs={\"\
+          k\": k})\n\n    hits = 0\n    for item in eval_set:\n        docs = retriever.invoke(item[\"\
+          query\"])\n        sources = [d.metadata.get(\"source\", \"\") for d in\
+          \ docs]\n        if item[\"expected_source\"] in sources:\n            hits\
+          \ += 1\n\n    hit_rate = hits / len(eval_set) if eval_set else 0.0\n   \
+          \ print(f\"Hit rate: {hit_rate:.2%} ({hits}/{len(eval_set)})\")\n    return\
+          \ hit_rate\n\n"
+        image: python:3.11-slim
+    exec-fetch-documents:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - fetch_documents
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'requests>=2.31,<3'\
+          \ 'beautifulsoup4>=4.12,<5' 'markdownify>=0.13,<1'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef fetch_documents(\n    urls: str,\n    source_type: str,\n   \
+          \ raw_documents: dsl.Output[dsl.Dataset],\n    metrics: dsl.Output[dsl.Metrics],\n\
+          \    glob_pattern: str = \"**/*.*\",\n    request_headers: str = \"{}\"\
+          ,\n    request_timeout: int = 60,\n    max_retries: int = 3,\n) -> str:\n\
+          \    \"\"\"Download content from a list of sources, normalise, and emit\
+          \ JSON-Lines.\n\n    Parameters\n    ----------\n    urls:\n        JSON-encoded\
+          \ **list** of source identifiers.\n        * ``\"url\"``       \u2192 ``[\"\
+          https://...\", \"https://...\"]``\n        * ``\"directory\"`` \u2192 ``[\"\
+          /mnt/data/docs\"]``   (single path)\n        * ``\"gcs\"``       \u2192\
+          \ ``[\"gs://bucket/prefix\"]``\n    source_type:\n        One of ``\"url\"\
+          ``, ``\"directory\"``, ``\"gcs\"``.\n    raw_documents:\n        Output\
+          \ Dataset \u2014 one JSON object per line (see module docstring).\n    metrics:\n\
+          \        Output Metrics artifact with fetch statistics.\n    glob_pattern:\n\
+          \        File-matching glob (directory mode only).\n    request_headers:\n\
+          \        JSON-encoded ``dict`` of HTTP headers (url mode only).\n    request_timeout:\n\
+          \        Per-request timeout in seconds.\n    max_retries:\n        Number\
+          \ of retry attempts for transient HTTP errors.\n\n    Returns\n    -------\n\
+          \    str\n        Human-readable summary.\n    \"\"\"\n    import hashlib\n\
+          \    import json\n    import logging\n    import re\n    import time\n \
+          \   import unicodedata\n    from datetime import datetime, timezone\n  \
+          \  from pathlib import Path\n\n    logging.basicConfig(level=logging.INFO)\n\
+          \    log = logging.getLogger(\"fetch_documents\")\n\n    # \u2500\u2500\
+          \ helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\n    def _normalise(text: str) -> str:\n\
+          \        \"\"\"Unicode NFC, collapse whitespace, strip control chars.\"\"\
+          \"\n        text = unicodedata.normalize(\"NFC\", text)\n        text =\
+          \ re.sub(r\"[^\\S\\n]+\", \" \", text)       # collapse spaces (keep \\\
+          n)\n        text = re.sub(r\"\\n{3,}\", \"\\n\\n\", text)       # max two\
+          \ consecutive newlines\n        text = re.sub(r\"[\\x00-\\x08\\x0b\\x0c\\\
+          x0e-\\x1f]\", \"\", text)  # ctrl chars\n        return text.strip()\n\n\
+          \    def _content_hash(text: str) -> str:\n        return hashlib.sha256(text.encode()).hexdigest()[:16]\n\
+          \n    def _extract_title_html(soup) -> str:\n        \"\"\"Best-effort title\
+          \ from HTML.\"\"\"\n        if soup.title and soup.title.string:\n     \
+          \       return soup.title.string.strip()\n        h1 = soup.find(\"h1\"\
+          )\n        if h1:\n            return h1.get_text(strip=True)\n        return\
+          \ \"\"\n\n    def _extract_title_md(text: str) -> str:\n        for line\
+          \ in text.splitlines():\n            line = line.strip()\n            if\
+          \ line.startswith(\"# \"):\n                return line.lstrip(\"# \").strip()\n\
+          \        return \"\"\n\n    def _fetch_url(url: str, headers: dict) -> dict:\n\
+          \        \"\"\"Download one URL with retries \u2192 structured record.\"\
+          \"\"\n        import requests\n        from bs4 import BeautifulSoup\n\n\
+          \        last_exc = None\n        for attempt in range(1, max_retries +\
+          \ 1):\n            try:\n                resp = requests.get(url, headers=headers,\
+          \ timeout=request_timeout)\n                resp.raise_for_status()\n  \
+          \              break\n            except requests.RequestException as exc:\n\
+          \                last_exc = exc\n                if attempt < max_retries:\n\
+          \                    wait = 2 ** attempt\n                    log.warning(\"\
+          Retry %d/%d for %s (wait %ds): %s\",\n                                attempt,\
+          \ max_retries, url, wait, exc)\n                    time.sleep(wait)\n \
+          \       else:\n            raise RuntimeError(\n                f\"Failed\
+          \ to fetch {url} after {max_retries} attempts\"\n            ) from last_exc\n\
+          \n        ctype = resp.headers.get(\"content-type\", \"\")\n        soup\
+          \ = BeautifulSoup(resp.text, \"html.parser\")\n\n        # Strip boiler-plate\
+          \ tags\n        for tag in soup([\"script\", \"style\", \"nav\", \"footer\"\
+          , \"header\",\n                         \"aside\", \"noscript\", \"iframe\"\
+          ]):\n            tag.decompose()\n\n        if \"markdown\" in ctype or\
+          \ url.endswith((\".md\", \".mdx\")):\n            text = _normalise(soup.get_text(separator=\"\
+          \\n\", strip=True))\n            title = _extract_title_md(text)\n     \
+          \       content_type = \"text/markdown\"\n        else:\n            text\
+          \ = _normalise(soup.get_text(separator=\"\\n\", strip=True))\n         \
+          \   title = _extract_title_html(soup)\n            content_type = \"text/html\"\
+          \n\n        return {\n            \"doc_id\": _content_hash(text),\n   \
+          \         \"source\": url,\n            \"content_type\": content_type,\n\
+          \            \"title\": title,\n            \"text\": text,\n          \
+          \  \"fetched_at\": datetime.now(timezone.utc).isoformat(),\n           \
+          \ \"char_count\": len(text),\n        }\n\n    def _fetch_directory(dir_path:\
+          \ str) -> list:\n        \"\"\"Walk a local directory and load text files.\"\
+          \"\"\n        records = []\n        root = Path(dir_path)\n        if not\
+          \ root.is_dir():\n            raise FileNotFoundError(f\"Directory not found:\
+          \ {dir_path}\")\n        # Use Path.glob which supports ** correctly\n \
+          \       for fpath in sorted(root.glob(glob_pattern)):\n            if not\
+          \ fpath.is_file():\n                continue\n            try:\n       \
+          \         raw = fpath.read_text(encoding=\"utf-8\", errors=\"replace\")\n\
+          \            except Exception as exc:\n                log.warning(\"Skipping\
+          \ %s: %s\", fpath, exc)\n                continue\n            text = _normalise(raw)\n\
+          \            if not text:\n                continue\n            suffix\
+          \ = fpath.suffix.lower()\n            if suffix in (\".md\", \".mdx\"):\n\
+          \                content_type = \"text/markdown\"\n                title\
+          \ = _extract_title_md(text)\n            elif suffix in (\".html\", \".htm\"\
+          ):\n                content_type = \"text/html\"\n                from bs4\
+          \ import BeautifulSoup\n                title = _extract_title_html(\n \
+          \                   BeautifulSoup(raw, \"html.parser\"))\n            else:\n\
+          \                content_type = \"text/plain\"\n                title =\
+          \ fpath.stem\n            records.append({\n                \"doc_id\":\
+          \ _content_hash(text),\n                \"source\": str(fpath),\n      \
+          \          \"content_type\": content_type,\n                \"title\": title,\n\
+          \                \"text\": text,\n                \"fetched_at\": datetime.now(timezone.utc).isoformat(),\n\
+          \                \"char_count\": len(text),\n            })\n        return\
+          \ records\n\n    # \u2500\u2500 main logic \u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    url_list = json.loads(urls)\
+          \ if isinstance(urls, str) else urls\n    if not isinstance(url_list, list)\
+          \ or not url_list:\n        raise ValueError(\n            f\"'urls' must\
+          \ be a non-empty JSON list, got: {urls!r}\"\n        )\n\n    headers =\
+          \ json.loads(request_headers) if request_headers else {}\n\n    documents:\
+          \ list[dict] = []\n    errors: list[str] = []\n\n    if source_type == \"\
+          url\":\n        for url in url_list:\n            try:\n               \
+          \ documents.append(_fetch_url(url, headers))\n                log.info(\"\
+          \u2713 %s (%d chars)\", url, documents[-1][\"char_count\"])\n          \
+          \  except Exception as exc:\n                errors.append(f\"{url}: {exc}\"\
+          )\n                log.error(\"\u2717 %s: %s\", url, exc)\n\n    elif source_type\
+          \ == \"directory\":\n        for dir_path in url_list:\n            try:\n\
+          \                documents.extend(_fetch_directory(dir_path))\n        \
+          \    except Exception as exc:\n                errors.append(f\"{dir_path}:\
+          \ {exc}\")\n                log.error(\"\u2717 %s: %s\", dir_path, exc)\n\
+          \n    elif source_type == \"gcs\":\n        raise NotImplementedError(\n\
+          \            \"GCS support requires gcsfs \u2014 extend _fetch_gcs() here.\"\
+          \n        )\n    else:\n        raise ValueError(\n            f\"Unsupported\
+          \ source_type={source_type!r}. \"\n            \"Choose from: url, directory,\
+          \ gcs.\"\n        )\n\n    if not documents and errors:\n        raise RuntimeError(\n\
+          \            f\"All sources failed:\\n\" + \"\\n\".join(errors)\n      \
+          \  )\n\n    # \u2500\u2500 persist \u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    out_path = Path(raw_documents.path)\n\
+          \    out_path.parent.mkdir(parents=True, exist_ok=True)\n    with open(out_path,\
+          \ \"w\") as fh:\n        for doc in documents:\n            fh.write(json.dumps(doc,\
+          \ ensure_ascii=False) + \"\\n\")\n\n    # artifact metadata\n    raw_documents.metadata[\"\
+          num_documents\"] = len(documents)\n    raw_documents.metadata[\"source_type\"\
+          ] = source_type\n    raw_documents.metadata[\"total_chars\"] = sum(d[\"\
+          char_count\"] for d in documents)\n    raw_documents.metadata[\"num_errors\"\
+          ] = len(errors)\n\n    # KFP Metrics\n    metrics.log_metric(\"documents_fetched\"\
+          , len(documents))\n    metrics.log_metric(\"fetch_errors\", len(errors))\n\
+          \    metrics.log_metric(\"total_chars\", sum(d[\"char_count\"] for d in\
+          \ documents))\n\n    msg = (f\"Fetched {len(documents)} documents \"\n \
+          \          f\"({len(errors)} errors) from {source_type}\")\n    log.info(msg)\n\
+          \    return msg\n\n"
+        image: python:3.11-slim
+    exec-generate-embeddings:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - generate_embeddings
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'langchain>=0.2,<1'\
+          \ 'langchain-huggingface>=0.1,<1' 'sentence-transformers>=3,<4'  &&  python3\
+          \ -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef generate_embeddings(\n    chunked_documents: dsl.Input[dsl.Dataset],\n\
+          \    embedded_documents: dsl.Output[dsl.Dataset],\n    metrics: dsl.Output[dsl.Metrics],\n\
+          \    embedding_model: str = \"sentence-transformers/all-MiniLM-L6-v2\",\n\
+          \    batch_size: int = 64,\n    normalize_embeddings: bool = True,\n) ->\
+          \ str:\n    \"\"\"Embed every text chunk and persist vectors alongside content.\n\
+          \n    Parameters\n    ----------\n    chunked_documents:\n        Input\
+          \ Dataset \u2014 JSON-Lines produced by ``chunk_text`` with at\n       \
+          \ minimum ``chunk_id`` and ``text`` keys.\n    embedded_documents:\n   \
+          \     Output Dataset \u2014 JSON-Lines, each record enriched with\n    \
+          \    ``embedding``, ``embedding_model``, and ``embedding_dim`` keys.\n \
+          \   metrics:\n        Output Metrics artifact with embedding statistics.\n\
+          \    embedding_model:\n        HuggingFace sentence-transformer model identifier.\n\
+          \    batch_size:\n        Number of texts to embed per forward pass.\n \
+          \   normalize_embeddings:\n        Whether to L2-normalise vectors (recommended\
+          \ for cosine similarity).\n\n    Returns\n    -------\n    str\n       \
+          \ Summary, e.g. ``\"Embedded 256 chunks (dim=384)\"``.\n    \"\"\"\n   \
+          \ import json\n    import logging\n    import time\n    from pathlib import\
+          \ Path\n\n    from langchain_huggingface import HuggingFaceEmbeddings\n\n\
+          \    logging.basicConfig(level=logging.INFO)\n    log = logging.getLogger(\"\
+          generate_embeddings\")\n\n    # \u2500\u2500 read chunks \u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    records: list[dict]\
+          \ = []\n    with open(chunked_documents.path) as fh:\n        for lineno,\
+          \ line in enumerate(fh, 1):\n            line = line.strip()\n         \
+          \   if not line:\n                continue\n            try:\n         \
+          \       records.append(json.loads(line))\n            except json.JSONDecodeError\
+          \ as exc:\n                log.warning(\"Skipping malformed line %d: %s\"\
+          , lineno, exc)\n\n    if not records:\n        # Write empty file and return\
+          \ early\n        out_path = Path(embedded_documents.path)\n        out_path.parent.mkdir(parents=True,\
+          \ exist_ok=True)\n        out_path.write_text(\"\")\n        embedded_documents.metadata[\"\
+          num_embedded\"] = 0\n        embedded_documents.metadata[\"embedding_dim\"\
+          ] = 0\n        metrics.log_metric(\"chunks_embedded\", 0)\n        return\
+          \ \"No chunks to embed.\"\n\n    texts = [r[\"text\"] for r in records]\n\
+          \    log.info(\"Embedding %d chunks with model=%s, batch_size=%d\",\n  \
+          \           len(texts), embedding_model, batch_size)\n\n    # \u2500\u2500\
+          \ embed in batches \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    model_kwargs\
+          \ = {}\n    encode_kwargs = {\"normalize_embeddings\": normalize_embeddings}\n\
+          \    embedder = HuggingFaceEmbeddings(\n        model_name=embedding_model,\n\
+          \        model_kwargs=model_kwargs,\n        encode_kwargs=encode_kwargs,\n\
+          \    )\n\n    all_embeddings: list[list[float]] = []\n    t0 = time.monotonic()\n\
+          \    for start in range(0, len(texts), batch_size):\n        batch = texts[start\
+          \ : start + batch_size]\n        all_embeddings.extend(embedder.embed_documents(batch))\n\
+          \        log.info(\"  embedded %d / %d\", len(all_embeddings), len(texts))\n\
+          \    elapsed = time.monotonic() - t0\n\n    dim = len(all_embeddings[0])\n\
+          \    log.info(\"Embedding complete: %d vectors (dim=%d) in %.1fs\",\n  \
+          \           len(all_embeddings), dim, elapsed)\n\n    # \u2500\u2500 write\
+          \ output \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \
+          \ out_path = Path(embedded_documents.path)\n    out_path.parent.mkdir(parents=True,\
+          \ exist_ok=True)\n    with open(out_path, \"w\") as fh:\n        for rec,\
+          \ emb in zip(records, all_embeddings):\n            rec[\"embedding\"] =\
+          \ emb\n            rec[\"embedding_model\"] = embedding_model\n        \
+          \    rec[\"embedding_dim\"] = dim\n            fh.write(json.dumps(rec,\
+          \ ensure_ascii=False) + \"\\n\")\n\n    # artifact metadata\n    embedded_documents.metadata[\"\
+          num_embedded\"] = len(all_embeddings)\n    embedded_documents.metadata[\"\
+          embedding_dim\"] = dim\n    embedded_documents.metadata[\"embedding_model\"\
+          ] = embedding_model\n    embedded_documents.metadata[\"elapsed_seconds\"\
+          ] = round(elapsed, 2)\n\n    # KFP Metrics\n    metrics.log_metric(\"chunks_embedded\"\
+          , len(all_embeddings))\n    metrics.log_metric(\"embedding_dim\", dim)\n\
+          \    metrics.log_metric(\"embed_elapsed_seconds\", round(elapsed, 2))\n\
+          \    metrics.log_metric(\"chunks_per_second\",\n                       round(len(all_embeddings)\
+          \ / elapsed, 1) if elapsed > 0 else 0)\n\n    msg = f\"Embedded {len(all_embeddings)}\
+          \ chunks (dim={dim}) in {elapsed:.1f}s\"\n    log.info(msg)\n    return\
+          \ msg\n\n"
+        image: python:3.11-slim
+    exec-store-vectors:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - store_vectors
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'chromadb>=0.5,<1'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef store_vectors(\n    embedded_documents: dsl.Input[dsl.Dataset],\n\
+          \    chroma_host: str,\n    chroma_port: int,\n    collection_name: str,\n\
+          \    metrics: dsl.Output[dsl.Metrics],\n    vector_db_type: str = \"chroma\"\
+          ,\n    distance_metric: str = \"cosine\",\n    upsert_batch_size: int =\
+          \ 5000,\n) -> str:\n    \"\"\"Upsert pre-computed vectors into a vector\
+          \ database.\n\n    Parameters\n    ----------\n    embedded_documents:\n\
+          \        Input Dataset \u2014 JSON-Lines produced by ``generate_embeddings``\n\
+          \        with at minimum ``chunk_id``, ``text``, ``embedding``, and\n  \
+          \      arbitrarily rich metadata fields.\n    chroma_host / chroma_port:\n\
+          \        Vector-store connection details.\n    collection_name:\n      \
+          \  Target collection / index name.\n    metrics:\n        Output Metrics\
+          \ artifact with indexing statistics.\n    vector_db_type:\n        Backend\
+          \ type (``\"chroma\"``).  Extend for others.\n    distance_metric:\n   \
+          \     Distance function (``cosine`` | ``l2`` | ``ip``).\n    upsert_batch_size:\n\
+          \        Max records per upsert call (Chroma cap \u2248 41 666).\n\n   \
+          \ Returns\n    -------\n    str\n        Summary, e.g. ``\"Indexed 256 vectors\
+          \ \u2192 collection 'agentic_rag'\"``.\n    \"\"\"\n    import hashlib\n\
+          \    import json\n    import logging\n    import time\n    from pathlib\
+          \ import Path\n\n    logging.basicConfig(level=logging.INFO)\n    log =\
+          \ logging.getLogger(\"store_vectors\")\n\n    # \u2500\u2500 read embedded\
+          \ records \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\n    records: list[dict] = []\n    with open(embedded_documents.path)\
+          \ as fh:\n        for lineno, line in enumerate(fh, 1):\n            line\
+          \ = line.strip()\n            if not line:\n                continue\n \
+          \           try:\n                records.append(json.loads(line))\n   \
+          \         except json.JSONDecodeError as exc:\n                log.warning(\"\
+          Skipping malformed line %d: %s\", lineno, exc)\n\n    if not records:\n\
+          \        metrics.log_metric(\"vectors_indexed\", 0)\n        return \"No\
+          \ records to index.\"\n\n    log.info(\"Read %d embedded records\", len(records))\n\
+          \n    # \u2500\u2500 validate required keys \u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    required_keys = {\"text\"\
+          , \"embedding\"}\n    for i, rec in enumerate(records):\n        missing\
+          \ = required_keys - rec.keys()\n        if missing:\n            raise ValueError(\n\
+          \                f\"Record {i} missing required keys: {missing}\"\n    \
+          \        )\n\n    # \u2500\u2500 upsert \u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\
+          \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n    if vector_db_type\
+          \ != \"chroma\":\n        raise ValueError(\n            f\"Unsupported\
+          \ vector_db_type={vector_db_type!r}. \"\n            \"Currently only 'chroma'\
+          \ is implemented.\"\n        )\n\n    import chromadb\n\n    client = chromadb.HttpClient(host=chroma_host,\
+          \ port=chroma_port)\n    collection = client.get_or_create_collection(\n\
+          \        name=collection_name,\n        metadata={\"hnsw:space\": distance_metric},\n\
+          \    )\n\n    # Prepare batch arrays\n    ids: list[str] = []\n    embeddings:\
+          \ list[list[float]] = []\n    documents: list[str] = []\n    metadatas:\
+          \ list[dict] = []\n\n    for rec in records:\n        # Use chunk_id if\
+          \ available, else hash the content\n        cid = rec.get(\"chunk_id\")\
+          \ or hashlib.sha256(\n            rec[\"text\"].encode()\n        ).hexdigest()[:16]\n\
+          \        ids.append(cid)\n        embeddings.append(rec[\"embedding\"])\n\
+          \        documents.append(rec[\"text\"])\n\n        # Chroma metadata values\
+          \ must be flat str/int/float/bool\n        meta = {}\n        for k, v in\
+          \ rec.items():\n            if k in (\"text\", \"embedding\"):\n       \
+          \         continue\n            if isinstance(v, (str, int, float, bool)):\n\
+          \                meta[k] = v\n        metadatas.append(meta)\n\n    t0 =\
+          \ time.monotonic()\n    batches = 0\n    for start in range(0, len(ids),\
+          \ upsert_batch_size):\n        end = start + upsert_batch_size\n       \
+          \ collection.upsert(\n            ids=ids[start:end],\n            embeddings=embeddings[start:end],\n\
+          \            documents=documents[start:end],\n            metadatas=metadatas[start:end],\n\
+          \        )\n        batches += 1\n        log.info(\"  upserted batch %d\
+          \ (%d-%d)\", batches, start, min(end, len(ids)))\n    elapsed = time.monotonic()\
+          \ - t0\n\n    log.info(\"Indexed %d vectors in %.1fs (%d batches)\",\n \
+          \            len(ids), elapsed, batches)\n\n    # KFP Metrics\n    metrics.log_metric(\"\
+          vectors_indexed\", len(ids))\n    metrics.log_metric(\"upsert_batches\"\
+          , batches)\n    metrics.log_metric(\"index_elapsed_seconds\", round(elapsed,\
+          \ 2))\n    metrics.log_metric(\"collection_name\", collection_name)\n\n\
+          \    msg = (f\"Indexed {len(ids)} vectors \u2192 collection '{collection_name}'\
+          \ \"\n           f\"in {elapsed:.1f}s\")\n    log.info(msg)\n    return\
+          \ msg\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: "Modular RAG ingestion: fetch documents \u2192 chunk text \u2192 generate\
+    \ embeddings \u2192 index vectors.  Optionally evaluates retrieval quality after\
+    \ indexing."
+  name: rag-ingestion-pipeline
+root:
+  dag:
+    tasks:
+      chunk-text:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-chunk-text
+        dependentTasks:
+        - fetch-documents
+        inputs:
+          artifacts:
+            raw_documents:
+              taskOutputArtifact:
+                outputArtifactKey: raw_documents
+                producerTask: fetch-documents
+          parameters:
+            chunk_overlap:
+              componentInputParameter: chunk_overlap
+            chunk_size:
+              componentInputParameter: chunk_size
+            separators:
+              componentInputParameter: separators
+        taskInfo:
+          name: chunk-text
+      condition-1:
+        componentRef:
+          name: comp-condition-1
+        dependentTasks:
+        - store-vectors
+        inputs:
+          parameters:
+            pipelinechannel--chroma_host:
+              componentInputParameter: chroma_host
+            pipelinechannel--chroma_port:
+              componentInputParameter: chroma_port
+            pipelinechannel--collection_name:
+              componentInputParameter: collection_name
+            pipelinechannel--embedding_model:
+              componentInputParameter: embedding_model
+            pipelinechannel--eval_queries_path:
+              componentInputParameter: eval_queries_path
+            pipelinechannel--retrieval_k:
+              componentInputParameter: retrieval_k
+            pipelinechannel--run_evaluation:
+              componentInputParameter: run_evaluation
+        taskInfo:
+          name: condition-1
+        triggerPolicy:
+          condition: inputs.parameter_values['pipelinechannel--run_evaluation'] ==
+            true
+      fetch-documents:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-fetch-documents
+        inputs:
+          parameters:
+            glob_pattern:
+              componentInputParameter: glob_pattern
+            max_retries:
+              componentInputParameter: max_retries
+            request_headers:
+              componentInputParameter: request_headers
+            request_timeout:
+              componentInputParameter: request_timeout
+            source_type:
+              componentInputParameter: source_type
+            urls:
+              componentInputParameter: urls
+        taskInfo:
+          name: fetch-documents
+      generate-embeddings:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-generate-embeddings
+        dependentTasks:
+        - chunk-text
+        inputs:
+          artifacts:
+            chunked_documents:
+              taskOutputArtifact:
+                outputArtifactKey: chunked_documents
+                producerTask: chunk-text
+          parameters:
+            batch_size:
+              componentInputParameter: embed_batch_size
+            embedding_model:
+              componentInputParameter: embedding_model
+            normalize_embeddings:
+              componentInputParameter: normalize_embeddings
+        taskInfo:
+          name: generate-embeddings
+      store-vectors:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-store-vectors
+        dependentTasks:
+        - generate-embeddings
+        inputs:
+          artifacts:
+            embedded_documents:
+              taskOutputArtifact:
+                outputArtifactKey: embedded_documents
+                producerTask: generate-embeddings
+          parameters:
+            chroma_host:
+              componentInputParameter: chroma_host
+            chroma_port:
+              componentInputParameter: chroma_port
+            collection_name:
+              componentInputParameter: collection_name
+            distance_metric:
+              componentInputParameter: distance_metric
+            upsert_batch_size:
+              componentInputParameter: upsert_batch_size
+            vector_db_type:
+              componentInputParameter: vector_db_type
+        taskInfo:
+          name: store-vectors
+  inputDefinitions:
+    parameters:
+      chroma_host:
+        defaultValue: chroma.kubeflow.svc.cluster.local
+        isOptional: true
+        parameterType: STRING
+      chroma_port:
+        defaultValue: 8000.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      chunk_overlap:
+        defaultValue: 64.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      chunk_size:
+        defaultValue: 512.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      collection_name:
+        defaultValue: agentic_rag
+        isOptional: true
+        parameterType: STRING
+      distance_metric:
+        defaultValue: cosine
+        description: '``"cosine"`` | ``"l2"`` | ``"ip"``'
+        isOptional: true
+        parameterType: STRING
+      embed_batch_size:
+        defaultValue: 64.0
+        description: Forward-pass batch size for the embedding model.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      embedding_model:
+        defaultValue: sentence-transformers/all-MiniLM-L6-v2
+        description: HuggingFace model identifier for embedding.
+        isOptional: true
+        parameterType: STRING
+      eval_queries_path:
+        defaultValue: /data/eval_queries.json
+        description: Path to the evaluation query set (JSON).
+        isOptional: true
+        parameterType: STRING
+      glob_pattern:
+        defaultValue: '**/*.md'
+        description: File-matching glob (directory mode only).
+        isOptional: true
+        parameterType: STRING
+      max_retries:
+        defaultValue: 3.0
+        description: Retry attempts for transient HTTP errors.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      normalize_embeddings:
+        defaultValue: true
+        description: Whether to L2-normalise embedding vectors.
+        isOptional: true
+        parameterType: BOOLEAN
+      request_headers:
+        defaultValue: '{}'
+        description: JSON-encoded HTTP headers (url mode only).
+        isOptional: true
+        parameterType: STRING
+      request_timeout:
+        defaultValue: 60.0
+        description: Per-request timeout in seconds.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      retrieval_k:
+        defaultValue: 5.0
+        description: Number of documents to retrieve per eval query.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      run_evaluation:
+        defaultValue: false
+        description: Whether to run retrieval evaluation after indexing.
+        isOptional: true
+        parameterType: BOOLEAN
+      separators:
+        defaultValue: '["\n\n", "\n", ". ", " ", ""]'
+        description: JSON-encoded list of split separators.
+        isOptional: true
+        parameterType: STRING
+      source_type:
+        defaultValue: directory
+        description: '``"url"`` | ``"directory"`` | ``"gcs"``'
+        isOptional: true
+        parameterType: STRING
+      upsert_batch_size:
+        defaultValue: 5000.0
+        description: Max records per upsert call.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      urls:
+        defaultValue: '["/data/documents"]'
+        description: JSON list of source URLs, directory paths, or GCS URIs.
+        isOptional: true
+        parameterType: STRING
+      vector_db_type:
+        defaultValue: chroma
+        description: Vector-store backend (currently ``"chroma"``).
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.15.2
