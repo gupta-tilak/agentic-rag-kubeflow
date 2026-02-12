@@ -10,8 +10,16 @@ class Settings(BaseSettings):
     """Application-wide settings, populated from env vars or .env file."""
 
     # LLM
-    openai_api_key: str = Field(default="", description="OpenAI API key")
+    openai_api_key: str = Field(default="", description="OpenAI API key (or dummy value for local vLLM)")
     llm_model_name: str = Field(default="gpt-4o-mini", description="LLM model identifier")
+    llm_base_url: str = Field(
+        default="",
+        description=(
+            "Base URL for the LLM API. Leave empty to use OpenAI cloud. "
+            "Set to the KServe vLLM endpoint for local serving, e.g. "
+            "'http://llm-server.kubeflow-user.svc.cluster.local/v1'"
+        ),
+    )
 
     # Vector store
     chroma_host: str = "localhost"

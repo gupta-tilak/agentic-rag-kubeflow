@@ -1,0 +1,108 @@
+# ──────────────────────────────────────────────────────────────────────
+# KServe InferenceService — Open-Source LLM (vLLM runtime)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Deploys an OpenAI-compatible LLM endpoint on Kubernetes via KServe.
+# The vLLM runtime exposes /v1/chat/completions compatible with the
+# LangChain ChatOpenAI client, so the LangGraph agent can call it
+# without code changes — just point OPENAI_API_BASE at the service URL.
+#
+# Swap the model by changing LLM_MODEL_ID (Llama 3, Mistral, etc.).
+# ──────────────────────────────────────────────────────────────────────
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: llm-server
+  namespace: kubeflow-user
+  labels:
+    app: agentic-rag
+    component: llm
+  annotations:
+    # ── Scale-to-zero ──────────────────────────────────────────────
+    # Knative autoscaler scales pods to 0 after the idle window.
+    autoscaling.knative.dev/min-scale: "0"      # enable scale-to-zero
+    autoscaling.knative.dev/max-scale: "2"      # cap GPU spend
+    autoscaling.knative.dev/target: "1"         # 1 concurrent request per pod
+    autoscaling.knative.dev/scale-down-delay: "300s"  # 5 min idle before scale-down
+
+    # ── Timeouts ───────────────────────────────────────────────────
+    # LLM generation can be slow; extend timeouts to avoid 504s.
+    serving.kserve.io/deploymentMode: RawDeployment   # optional: use raw K8s Deployment
+spec:
+  predictor:
+    # ── Model configuration ────────────────────────────────────────
+    # Timeout for the first model load (large weights download).
+    timeout: 1200
+    model:
+      modelFormat:
+        name: vLLM
+      # ────────────────────────────────────────────────────────────
+      # LLM_MODEL_ID — change this to serve a different model.
+      #
+      # Tested options:
+      #   - meta-llama/Meta-Llama-3.1-8B-Instruct   (8 B, 1 × A100/L4)
+      #   - mistralai/Mistral-7B-Instruct-v0.3       (7 B, 1 × A100/L4)
+      #   - microsoft/Phi-3-mini-4k-instruct         (3.8 B, fits T4)
+      #   - Qwen/Qwen2.5-7B-Instruct                (7 B, 1 × A100/L4)
+      # ────────────────────────────────────────────────────────────
+      storageUri: "hf://meta-llama/Meta-Llama-3.1-8B-Instruct"
+      runtime: kserve-vllm
+
+      # ── Container overrides ──────────────────────────────────────
+      resources:
+        requests:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "1"
+        limits:
+          cpu: "8"
+          memory: "24Gi"
+          nvidia.com/gpu: "1"
+
+      # ── vLLM engine args passed as extra container args ─────────
+      args:
+        - "--max-model-len=8192"
+        - "--gpu-memory-utilization=0.90"
+        - "--enforce-eager"                 # save memory on small GPUs
+        - "--dtype=auto"
+        - "--chat-template=auto"            # uses the model's built-in template
+
+      env:
+        # HuggingFace token for gated models (Llama 3, etc.)
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: hf-token
+              optional: true
+        # Expose OpenAI-compatible API (default in vLLM ≥ 0.4)
+        - name: VLLM_API_TYPE
+          value: "openai"
+
+      ports:
+        - containerPort: 8000
+          protocol: TCP
+
+    # ── Pod-level settings ─────────────────────────────────────────
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      cloud.google.com/gke-accelerator: "nvidia-l4"   # adjust per cluster
+
+---
+# ──────────────────────────────────────────────────────────────────────
+# Secret — HuggingFace token (required for gated models like Llama 3)
+# ──────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-secrets
+  namespace: kubeflow-user
+type: Opaque
+stringData:
+  hf-token: "REPLACE_WITH_YOUR_HF_TOKEN"
+  # Keep the existing OpenAI key for any fallback usage
+  openai-api-key: "REPLACE_ME"

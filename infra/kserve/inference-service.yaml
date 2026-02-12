@@ -20,6 +20,10 @@ spec:
               secretKeyRef:
                 name: llm-secrets
                 key: openai-api-key
+          - name: LLM_BASE_URL
+            value: "http://llm-server.kubeflow-user.svc.cluster.local/v1"
+          - name: LLM_MODEL_NAME
+            value: "meta-llama/Meta-Llama-3.1-8B-Instruct"
           - name: CHROMA_HOST
             value: "chroma.kubeflow.svc.cluster.local"
           - name: CHROMA_PORT
